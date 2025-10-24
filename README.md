@@ -144,6 +144,70 @@ The application automatically traces:
   - Query execution times are tracked
   - Database connection information is captured
 
+### Activity Patterns: Activity.Current vs Child Spans
+
+This demo demonstrates two different approaches to working with OpenTelemetry activities:
+
+#### 1. Adding Tags to the Automatic Activity (`/weatherforecast`)
+
+```csharp
+app.MapGet("/weatherforecast", async (ILogger<Program> logger) =>
+{
+    // ASP.NET Core middleware already created an activity for this HTTP request
+    // We're just adding custom tags to that existing activity
+    Activity.Current?.SetTag("forecast.count", 5);
+    
+    await Task.Delay(Random.Shared.Next(50, 200));
+    
+    var forecast = Enumerable.Range(1, 5).Select(index => /* ... */).ToArray();
+    
+    Activity.Current?.SetSuccess();
+    return forecast;
+});
+```
+
+**What happens in Jaeger:**
+- **ONE span**: `GET /weatherforecast` (created by ASP.NET Core middleware)
+- The span includes our custom tags: `forecast.count=5`
+- Clean and simple for straightforward endpoints
+
+#### 2. Creating Child Spans (`/weather/{city}`)
+
+```csharp
+app.MapGet("/weather/{city}", async (string city, ILogger<Program> logger) =>
+{
+    // We're creating NEW child activities under the ASP.NET Core activity
+    using var activity = activitySource.StartActivity("get-weather-for-city");
+    activity?.SetTag("city", city);
+    
+    using var apiActivity = activitySource.StartActivity("external-weather-api-call");
+    apiActivity?.SetTag("api.endpoint", "external-weather-service");
+    
+    await Task.Delay(Random.Shared.Next(100, 500));
+    
+    // ... rest of code
+});
+```
+
+**What happens in Jaeger:**
+- **Three spans** in a parent-child hierarchy:
+  1. **Parent**: `GET /weather/{city}` (ASP.NET Core middleware)
+  2. **Child 1**: `get-weather-for-city` (our custom span)
+  3. **Child 2**: `external-weather-api-call` (nested under child 1)
+- Better visibility into internal operations
+- Useful for breaking down complex operations
+
+#### When to Use Each Approach
+
+| Approach | Use When | Benefits |
+|----------|----------|----------|
+| **Activity.Current** | Simple endpoints with no sub-operations | Cleaner traces, less overhead |
+| **Child Spans** | Complex operations that need breakdown | Better observability, timing of sub-operations |
+
+**Key Insight:** ASP.NET Core middleware **always** creates a root activity for every HTTP request. You're choosing whether to:
+- Enhance it with tags (`Activity.Current`)
+- Create child spans to break down the work (`activitySource.StartActivity()`)
+
 ### Custom Spans
 The application creates custom spans for:
 - `generate-weather-forecast`: Weather forecast generation

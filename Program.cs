@@ -77,8 +77,7 @@ var summaries = new[]
 
 app.MapGet("/weatherforecast", async (ILogger<Program> logger) =>
 {
-    using var activity = activitySource.StartActivity("generate-weather-forecast");
-    activity?.SetTag("forecast.count", 5);
+    Activity.Current?.SetTag("forecast.count", 5);
 
     await Task.Delay(Random.Shared.Next(50, 200));
     
@@ -91,8 +90,7 @@ app.MapGet("/weatherforecast", async (ILogger<Program> logger) =>
         ))
         .ToArray();
 
-    activity?.SetTag("forecast.generated", true);
-    activity?.SetSuccess();  // Using extension method
+    Activity.Current?.SetSuccess();  
     return forecast;
 })
 .WithName("GetWeatherForecast");
