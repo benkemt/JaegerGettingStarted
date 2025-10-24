@@ -1,0 +1,65 @@
+@JaegerDemo.Api_HostAddress = https://localhost:7064
+
+### Get Weather Forecast
+GET {{JaegerDemo.Api_HostAddress}}/weatherforecast
+Accept: application/json
+
+### Get Weather for Specific City
+GET {{JaegerDemo.Api_HostAddress}}/weather/London
+Accept: application/json
+
+### Get Weather for Another City
+GET {{JaegerDemo.Api_HostAddress}}/weather/Tokyo
+Accept: application/json
+
+### Bulk Weather Processing
+POST {{JaegerDemo.Api_HostAddress}}/weather/bulk
+Content-Type: application/json
+
+{
+  "cities": ["New York", "London", "Tokyo", "Sydney", "Paris"]
+}
+
+###
+
+### NEW: Save Weather Record to Database
+POST {{JaegerDemo.Api_HostAddress}}/weather/record
+Content-Type: application/json
+
+{
+  "city": "London",
+  "temperature": 18,
+  "summary": "Mild"
+}
+
+###
+
+### NEW: Save Another Weather Record
+POST {{JaegerDemo.Api_HostAddress}}/weather/record
+Content-Type: application/json
+
+{
+  "city": "Paris",
+  "temperature": 22,
+  "summary": "Warm"
+}
+
+###
+
+### NEW: Get Weather Records for a City
+GET {{JaegerDemo.Api_HostAddress}}/weather/records/London
+Accept: application/json
+
+###
+
+### NEW: Get Latest Weather for a City
+GET {{JaegerDemo.Api_HostAddress}}/weather/latest/London
+Accept: application/json
+
+###
+
+### NEW: Get All Cities with Weather Data
+GET {{JaegerDemo.Api_HostAddress}}/weather/cities
+Accept: application/json
+
+###
