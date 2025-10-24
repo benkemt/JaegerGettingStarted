@@ -3,6 +3,7 @@ using OpenTelemetry.Resources;
 using OpenTelemetry.Exporter;
 using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
+using JaegerDemo.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,7 +30,11 @@ builder.Services.AddOpenTelemetry()
             .SetResourceBuilder(ResourceBuilder.CreateDefault()
                 .AddService(serviceName: "JaegerDemo.Api", serviceVersion: "1.0.0"))
             .SetSampler(new AlwaysOnSampler())
-            .AddAspNetCoreInstrumentation()
+            .AddAspNetCoreInstrumentation(options =>
+            {
+                // Automatically record exceptions in ASP.NET Core request spans
+                options.RecordException = true;
+            })
             .AddHttpClientInstrumentation()
             .AddEntityFrameworkCoreInstrumentation()  // EF Core queries will be traced automatically
             .AddSource("JaegerDemo.Api")
@@ -54,6 +59,9 @@ using (var scope = app.Services.CreateScope())
 // Log startup
 app.Logger.LogInformation("Application starting with OpenTelemetry configured");
 
+// Add exception tracing middleware - automatically records ALL unhandled exceptions
+app.UseExceptionTracing();
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
@@ -71,7 +79,6 @@ app.MapGet("/weatherforecast", async (ILogger<Program> logger) =>
 {
     using var activity = activitySource.StartActivity("generate-weather-forecast");
     activity?.SetTag("forecast.count", 5);
-    activity?.AddEvent(new ActivityEvent("Forecast generation started"));
 
     await Task.Delay(Random.Shared.Next(50, 200));
     
@@ -85,7 +92,7 @@ app.MapGet("/weatherforecast", async (ILogger<Program> logger) =>
         .ToArray();
 
     activity?.SetTag("forecast.generated", true);
-    activity?.AddEvent(new ActivityEvent("Forecast generation completed"));
+    activity?.SetSuccess();  // Using extension method
     return forecast;
 })
 .WithName("GetWeatherForecast");
@@ -94,201 +101,125 @@ app.MapGet("/weather/{city}", async (string city, ILogger<Program> logger) =>
 {
     using var activity = activitySource.StartActivity("get-weather-for-city");
     activity?.SetTag("city", city);
-    activity?.AddEvent(new ActivityEvent($"Processing weather for {city}"));
     
-    try
-    {
-        using var apiActivity = activitySource.StartActivity("external-weather-api-call");
-        apiActivity?.SetTag("api.endpoint", "external-weather-service");
-        apiActivity?.AddEvent(new ActivityEvent("Calling external weather API"));
+    using var apiActivity = activitySource.StartActivity("external-weather-api-call");
+    apiActivity?.SetTag("api.endpoint", "external-weather-service");
 
-        if (city == "Tokyo")
-        {
-            var exception = new InvalidOperationException("Bad Town");
-            throw exception;
-        }
-
-        await Task.Delay(Random.Shared.Next(100, 500));
-        
-        var temperature = Random.Shared.Next(-10, 40);
-        var summary = summaries[Random.Shared.Next(summaries.Length)];
-        
-        apiActivity?.SetTag("api.response.temperature", temperature);
-        apiActivity?.SetTag("api.response.summary", summary);
-        apiActivity?.AddEvent(new ActivityEvent($"API returned temp: {temperature}°C"));
-        
-        activity?.SetStatus(ActivityStatusCode.Ok);
-        
-        return new WeatherForecast(
-            DateOnly.FromDateTime(DateTime.Now),
-            temperature,
-            summary
-        );
-    }
-    catch (Exception ex)
+    if (city == "Tokyo")
     {
-        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-        activity?.AddException(ex);
-        throw;
+        // Middleware will catch and record this automatically!
+        throw new InvalidOperationException("Bad Town");
     }
+
+    await Task.Delay(Random.Shared.Next(100, 500));
+    
+    var temperature = Random.Shared.Next(-10, 40);
+    var summary = summaries[Random.Shared.Next(summaries.Length)];
+    
+    apiActivity?.SetTag("api.response.temperature", temperature);
+    apiActivity?.SetTag("api.response.summary", summary);
+    apiActivity?.SetSuccess();  // Using extension method
+    
+    activity?.SetSuccess();  // Using extension method
+    
+    return new WeatherForecast(
+        DateOnly.FromDateTime(DateTime.Now),
+        temperature,
+        summary
+    );
 })
 .WithName("GetWeatherForCity");
 
-// NEW: Save weather data to database
 app.MapPost("/weather/record", async (WeatherRecordRequest request, WeatherDbContext db, ILogger<Program> logger) =>
 {
     using var activity = activitySource.StartActivity("save-weather-record");
     activity?.SetTag("city", request.City);
-    activity?.AddEvent(new ActivityEvent($"Saving weather record for {request.City}"));
 
-    logger.LogInformation("Saving weather record for {City}: {Temperature}°C", request.City, request.Temperature);
+    logger.LogInformation("Saving weather record for {City}", request.City);
 
-    try
+    var record = new WeatherRecord
     {
-        var record = new WeatherRecord
-        {
-            City = request.City,
-            Temperature = request.Temperature,
-            Summary = request.Summary ?? summaries[Random.Shared.Next(summaries.Length)],
-            RecordedAt = DateTime.UtcNow
-        };
+        City = request.City,
+        Temperature = request.Temperature,
+        Summary = request.Summary ?? summaries[Random.Shared.Next(summaries.Length)],
+        RecordedAt = DateTime.UtcNow
+    };
 
-        db.WeatherRecords.Add(record);
-        await db.SaveChangesAsync();
+    db.WeatherRecords.Add(record);
+    await db.SaveChangesAsync();  // Exception auto-recorded by middleware!
 
-        activity?.SetTag("record.id", record.Id);
-        activity?.SetStatus(ActivityStatusCode.Ok);
-        activity?.AddEvent(new ActivityEvent($"Weather record saved with ID: {record.Id}"));
-        logger.LogInformation("Weather record saved with ID: {Id}", record.Id);
+    activity?.SetTag("record.id", record.Id);
+    activity?.SetSuccess();  // Using extension method
 
-        return Results.Created($"/weather/record/{record.Id}", record);
-    }
-    catch (Exception ex)
-    {
-        // Record the exception in the activity - THIS IS KEY for database errors!
-        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-        activity?.AddException(ex);
-        activity?.AddEvent(new ActivityEvent($"Failed to save weather record: {ex.Message}"));
-        
-        logger.LogError(ex, "Failed to save weather record for {City}", request.City);
-        
-        // Re-throw to let ASP.NET Core handle the error response
-        throw;
-    }
+    return Results.Created($"/weather/record/{record.Id}", record);
 })
 .WithName("SaveWeatherRecord");
 
-// NEW: Get weather records for a city from database
 app.MapGet("/weather/records/{city}", async (string city, WeatherDbContext db, ILogger<Program> logger) =>
 {
     using var activity = activitySource.StartActivity("get-weather-records");
     activity?.SetTag("city", city);
-    activity?.AddEvent(new ActivityEvent($"Fetching weather records for {city}"));
 
     logger.LogInformation("Fetching weather records for {City}", city);
 
-    try
-    {
-        // This query will be traced by OpenTelemetry EF Core instrumentation
-        var records = await db.WeatherRecords
-            .Where(w => w.City == city)
-            .OrderByDescending(w => w.RecordedAt)
-            .Take(10)
-            .ToListAsync();
+    var records = await db.WeatherRecords
+        .Where(w => w.City == city)
+        .OrderByDescending(w => w.RecordedAt)
+        .Take(10)
+        .ToListAsync();
 
-        activity?.SetTag("records.count", records.Count);
-        activity?.SetStatus(ActivityStatusCode.Ok);
-        activity?.AddEvent(new ActivityEvent($"Found {records.Count} records for {city}"));
-        logger.LogInformation("Found {Count} records for {City}", records.Count, city);
+    activity?.SetTag("records.count", records.Count);
+    activity?.SetSuccess();  // Using extension method
+    
+    logger.LogInformation("Found {Count} records for {City}", records.Count, city);
 
-        return records;
-    }
-    catch (Exception ex)
-    {
-        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-        activity?.AddException(ex);
-        activity?.AddEvent(new ActivityEvent($"Failed to fetch weather records: {ex.Message}"));
-        
-        logger.LogError(ex, "Failed to fetch weather records for {City}", city);
-        throw;
-    }
+    return records;
 })
 .WithName("GetWeatherRecords");
 
-// NEW: Get latest weather for a city from database
 app.MapGet("/weather/latest/{city}", async (string city, WeatherDbContext db, ILogger<Program> logger) =>
 {
     using var activity = activitySource.StartActivity("get-latest-weather");
     activity?.SetTag("city", city);
-    activity?.AddEvent(new ActivityEvent($"Fetching latest weather for {city}"));
 
     logger.LogInformation("Fetching latest weather for {City}", city);
 
-    try
+    var latestRecord = await db.WeatherRecords
+        .Where(w => w.City == city)
+        .OrderByDescending(w => w.RecordedAt)
+        .FirstOrDefaultAsync();
+
+    if (latestRecord == null)
     {
-        var latestRecord = await db.WeatherRecords
-            .Where(w => w.City == city)
-            .OrderByDescending(w => w.RecordedAt)
-            .FirstOrDefaultAsync();
-
-        if (latestRecord == null)
-        {
-            activity?.SetTag("record.found", false);
-            activity?.SetStatus(ActivityStatusCode.Ok);
-            activity?.AddEvent(new ActivityEvent($"No records found for {city}"));
-            return Results.NotFound(new { message = $"No weather records found for {city}" });
-        }
-
-        activity?.SetTag("record.found", true);
-        activity?.SetTag("temperature", latestRecord.Temperature);
-        activity?.SetStatus(ActivityStatusCode.Ok);
-        activity?.AddEvent(new ActivityEvent($"Latest record: {latestRecord.Temperature}°C"));
-
-        return Results.Ok(latestRecord);
+        activity?.SetTag("record.found", false);
+        activity?.SetSuccess();  // Using extension method
+        return Results.NotFound(new { message = $"No weather records found for {city}" });
     }
-    catch (Exception ex)
-    {
-        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-        activity?.AddException(ex);
-        activity?.AddEvent(new ActivityEvent($"Failed to fetch latest weather: {ex.Message}"));
-        
-        logger.LogError(ex, "Failed to fetch latest weather for {City}", city);
-        throw;
-    }
+
+    activity?.SetTag("record.found", true);
+    activity?.SetTag("temperature", latestRecord.Temperature);
+    activity?.SetSuccess();  // Using extension method
+
+    return Results.Ok(latestRecord);
 })
 .WithName("GetLatestWeather");
 
-// NEW: Get all cities with weather data
 app.MapGet("/weather/cities", async (WeatherDbContext db, ILogger<Program> logger) =>
 {
     using var activity = activitySource.StartActivity("get-all-cities");
-    activity?.AddEvent(new ActivityEvent("Fetching all cities with weather data"));
 
     logger.LogInformation("Fetching all cities");
 
-    try
-    {
-        var cities = await db.WeatherRecords
-            .Select(w => w.City)
-            .Distinct()
-            .OrderBy(c => c)
-            .ToListAsync();
+    var cities = await db.WeatherRecords
+        .Select(w => w.City)
+        .Distinct()
+        .OrderBy(c => c)
+        .ToListAsync();
 
-        activity?.SetTag("cities.count", cities.Count);
-        activity?.SetStatus(ActivityStatusCode.Ok);
-        activity?.AddEvent(new ActivityEvent($"Found {cities.Count} cities"));
+    activity?.SetTag("cities.count", cities.Count);
+    activity?.SetSuccess();  // Using extension method
 
-        return cities;
-    }
-    catch (Exception ex)
-    {
-        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-        activity?.AddException(ex);
-        activity?.AddEvent(new ActivityEvent($"Failed to fetch cities: {ex.Message}"));
-        
-        logger.LogError(ex, "Failed to fetch cities");
-        throw;
-    }
+    return cities;
 })
 .WithName("GetAllCities");
 
