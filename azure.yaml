@@ -1,0 +1,11 @@
+# Azure Developer CLI (azd) Configuration
+name: jaeger-demo-appinsights
+metadata:
+  template: azd-init@1.9.5
+
+infra:
+  provider: bicep
+  path: infra/AzureAppInsight
+
+# No services defined - this is infrastructure only
+services: {}

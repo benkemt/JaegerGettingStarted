@@ -1,0 +1,5 @@
+# Azure Developer CLI - Ignore files
+.azure/
+.env
+*.env.local
+.DS_Store

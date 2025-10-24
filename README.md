@@ -1,6 +1,6 @@
 # Jaeger + OpenTelemetry + .NET 9 Demo
 
-This project demonstrates how to integrate OpenTelemetry with Jaeger for distributed tracing in a .NET 9 Web API application, including Entity Framework Core database operations.
+This project demonstrates how to integrate OpenTelemetry with Jaeger for distributed tracing in a .NET 9 Web API application, including Entity Framework Core database operations. **Now with Azure Application Insights support!**
 
 ## 🎯 Learning Objectives
 
@@ -10,6 +10,7 @@ This project demonstrates how to integrate OpenTelemetry with Jaeger for distrib
 - Monitor API performance and behavior
 - Track database operations with EF Core instrumentation
 - Handle exceptions with automatic tracing
+- **Deploy Azure Application Insights with Infrastructure as Code** 🆕
 
 ## 📋 Prerequisites
 
@@ -17,6 +18,9 @@ This project demonstrates how to integrate OpenTelemetry with Jaeger for distrib
 - Docker Desktop
 - SQL Server LocalDB (included with Visual Studio) or SQL Server Express
 - Visual Studio 2022 or Visual Studio Code (optional)
+- Azure Developer CLI (azd) - [Install Guide](https://aka.ms/install-azd)
+- Azure subscription with active credits
+- Azure CLI (optional but recommended)
 
 ## 🚀 Quick Start
 
@@ -86,6 +90,79 @@ curl https://localhost:7064/weather/cities -k
 2. Select "JaegerDemo.Api" from the service dropdown
 3. Click "Find Traces" to see your application traces
 4. Notice the database query spans within your traces!
+
+## ☁️ Azure Application Insights Deployment (NEW!)
+
+This project includes infrastructure-as-code for deploying Azure Application Insights using Azure Developer CLI (azd).
+
+### Prerequisites for Azure
+- Azure Developer CLI (azd) - [Install Guide](https://aka.ms/install-azd)
+- Azure subscription with active credits
+- Azure CLI (optional but recommended)
+
+### Quick Deploy to Azure
+
+#### Windows (PowerShell)
+```powershell
+# Navigate to project root
+cd D:\Source\Repos\JaegerGettingStarted
+
+# Deploy with automatic configuration update
+.\infra\AzureAppInsight\deploy.ps1 -UpdateAppSettings
+```
+
+#### Linux/macOS
+```bash
+# Navigate to project root
+cd ~/JaegerGettingStarted
+
+# Make script executable (first time only)
+chmod +x infra/AzureAppInsight/deploy.sh
+
+# Deploy with automatic configuration update
+./infra/AzureAppInsight/deploy.sh -u
+```
+
+#### Manual azd commands
+```bash
+azd auth login
+azd env new jaeger-demo
+azd provision
+```
+
+### What Gets Deployed
+- ✅ Azure Resource Group
+- ✅ Log Analytics Workspace
+- ✅ Application Insights resource
+- ✅ Connection string automatically retrieved
+- ✅ Optional: `appsettings.json` automatically updated
+
+### Dual Monitoring Setup
+
+After deployment, your application sends telemetry to **BOTH**:
+1. **Jaeger** (localhost) - For local development and learning
+2. **Azure Application Insights** - For production-grade monitoring
+
+View traces in:
+- **Jaeger UI**: http://localhost:16686 (instant feedback)
+- **Azure Portal**: Application Insights → Transaction search (2-3 min delay)
+
+### Cost Information
+- **Free tier**: First 5 GB/month is free
+- **Most development apps**: Stay within free tier
+- **Beyond free tier**: ~$2.30/GB
+- **Set daily caps** to control costs (see infrastructure docs)
+
+### Infrastructure Documentation
+Detailed guides available in `infra/AzureAppInsight/`:
+- **README.md** - Complete deployment guide
+- **QUICK_REFERENCE.md** - Command reference and troubleshooting
+- **deploy.ps1** / **deploy.sh** - Automated deployment scripts
+
+### Clean Up Azure Resources
+```bash
+azd down
+```
 
 ## 📊 API Endpoints
 
@@ -315,108 +392,17 @@ builder.Services.AddOpenTelemetry()
 
 The Jaeger container is configured in `docker-compose.yml` with OTLP support enabled.
 
-## 📝 Key Concepts for Beginners
-
-### What is OpenTelemetry?
-OpenTelemetry is an open-source observability framework that provides APIs, libraries, and tools to collect, process, and export telemetry data (traces, metrics, logs).
-
-### What is Jaeger?
-Jaeger is a distributed tracing system used for monitoring and troubleshooting microservices-based distributed systems.
-
-### What are Spans?
-Spans represent individual operations within a trace. Each span has:
-- A name
-- Start and end time
-- Attributes (key-value pairs)
-- Parent-child relationships
-- Status (OK, ERROR)
-- Events and exceptions
-
-### What are Traces?
-Traces represent the journey of a request through your system, composed of multiple spans.
-
-### Database Tracing
-With EF Core instrumentation, you can see:
-- Which database queries are executed
-- How long each query takes
-- The actual SQL statements
-- Database connection details
-- Query parameters (with proper configuration)
-
-## 🔧 Troubleshooting
-
-### Jaeger UI not accessible
-- Ensure Docker container is running: `docker ps`
-- Check if port 16686 is available
-- Restart container: `docker-compose restart`
-
-### No traces appearing in Jaeger
-- Verify the application is making requests
-- Check application logs for OpenTelemetry errors
-- Ensure Jaeger is receiving on port 4317 (gRPC)
-
-### Database connection errors
-- Ensure SQL Server LocalDB is running: `sqllocaldb info`
-- Start LocalDB: `sqllocaldb start MSSQLLocalDB`
-- Check connection string in `appsettings.json`
-
-### Migration errors
-- Drop database: `dotnet ef database drop`
-- Restart application to recreate database
-
-### Build errors
-- Ensure .NET 9 SDK is installed: `dotnet --version`
-- Restore packages: `dotnet restore`
-- Check NuGet sources: `dotnet nuget list source`
-
-## 📚 Architecture & Best Practices
-
-### Code Structure
-- **ExceptionTracingMiddleware.cs**: Automatic exception recording for all endpoints
-- **ActivityExtensions.cs**: Helper methods to reduce boilerplate (`SetSuccess()`, `RecordError()`)
-- **ActivityExceptionFilter.cs**: Alternative filter-based exception handling (optional)
-
-### Clean Code Pattern
-The application uses minimal boilerplate:
-- ❌ No try-catch blocks in endpoints (middleware handles it)
-- ✅ Extension methods for common operations
-- ✅ Automatic exception recording
-- ✅ Focus on business logic
-
-Example:
-```csharp
-app.MapPost("/weather/record", async (request, db) =>
-{
-    using var activity = activitySource.StartActivity("save-weather-record");
-    activity?.SetTag("city", request.City);
-    
-    var record = new WeatherRecord { ... };
-    await db.SaveChangesAsync();  // Exceptions auto-traced!
-    
-    activity?.SetSuccess();  // Extension method
-    return Results.Created($"/weather/record/{record.Id}", record);
-});
-```
-
-## 🚀 Next Steps
-
-1. **Explore Traces**: Open Jaeger and explore the database query spans
-2. **Test Error Scenarios**: Stop SQL Server and see exception details in Jaeger
-3. **Add Custom Metrics**: Implement OpenTelemetry metrics alongside tracing
-4. **Add Logging**: Integrate structured logging with OpenTelemetry
-5. **Production Setup**: Configure sampling and exporters for production
-6. **Multiple Services**: Create multiple services to see distributed tracing across services
-7. **Azure Deployment**: Deploy to Azure with Azure SQL Database
-
 ## 📚 Additional Resources
 
 ### Documentation Created
+- **AZURE_APPLICATION_INSIGHTS_INTEGRATION.md**: Complete Azure integration guide 🆕
 - **EF_CORE_OPENTELEMETRY.md**: Entity Framework Core integration guide
 - **SQL_SERVER_MIGRATION.md**: Complete SQL Server setup guide
 - **QUICK_START_SQL_SERVER.md**: Quick verification steps
 - **ERROR_HANDLING_GUIDE.md**: Exception tracing guide with examples
 - **REDUCING_BOILERPLATE.md**: Best practices for clean code
 - **CODE_SIMPLIFICATION_APPLIED.md**: Before/after code comparisons
+- **infra/AzureAppInsight/README.md**: Infrastructure deployment guide 🆕
 
 ### External Resources
 - [OpenTelemetry .NET Documentation](https://opentelemetry.io/docs/instrumentation/net/)
@@ -444,10 +430,14 @@ By exploring this demo, you'll understand:
 - ✅ **Automatic exception recording** (no try-catch needed!)
 - ✅ **SQL Server integration** with LocalDB
 - ✅ **OTLP over gRPC** export to Jaeger
+- ✅ **Azure Application Insights integration** 🆕
+- ✅ **Infrastructure as Code (Bicep)** 🆕
+- ✅ **Azure Developer CLI (azd) deployment** 🆕
 - ✅ **Clean code patterns** with extension methods
 - ✅ **Error visualization** in Jaeger UI
 - ✅ **Performance monitoring** of database queries
+- ✅ **Production-ready cloud monitoring** 🆕
 
 ---
 
-**Happy Tracing!** 🚀 If you have questions, check the documentation in the `Help/` folder or create an issue on GitHub.
+**Happy Tracing!** 🚀 If you have questions, check the documentation in the `Help/` and `infra/` folders or create an issue on GitHub.

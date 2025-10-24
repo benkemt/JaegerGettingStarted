@@ -4,6 +4,7 @@ using OpenTelemetry.Exporter;
 using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using JaegerDemo.Api;
+using Azure.Monitor.OpenTelemetry.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,8 +23,13 @@ builder.Services.AddDbContext<WeatherDbContext>(options =>
 // Create an ActivitySource BEFORE OpenTelemetry configuration
 var activitySource = new ActivitySource("JaegerDemo.Api");
 
-// Add OpenTelemetry
+// Add OpenTelemetry with Azure Monitor (Application Insights)
 builder.Services.AddOpenTelemetry()
+    .UseAzureMonitor(options =>
+    {
+        // Get connection string from configuration
+        options.ConnectionString = builder.Configuration.GetConnectionString("ApplicationInsights");
+    })
     .WithTracing(tracerProviderBuilder =>
     {
         tracerProviderBuilder
